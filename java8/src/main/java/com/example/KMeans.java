@@ -1,6 +1,7 @@
 package com.example;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.val;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -15,8 +16,8 @@ import static java.util.stream.Collectors.minBy;
  */
 public class KMeans {
 
-    int n = 10;
-    int iters = 15;
+    final int n = 10;
+    final int iters = 15;
 
     public void run(List<Point> xs) {
         Stream<Point> centroids = xs.stream().limit(n);
@@ -24,7 +25,7 @@ public class KMeans {
             centroids = clusters(xs, centroids.collect(toList()))
                         .stream().map(this::average);
         }
-        List<Point> ps = centroids.collect(toList());
+        final List<Point> ps = centroids.collect(toList());
         clusters(xs, ps);
     }
 
