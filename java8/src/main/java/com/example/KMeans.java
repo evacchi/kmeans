@@ -17,13 +17,12 @@ public class KMeans {
     int iters = 15;
 
     public void run(List<Point> xs) {
-        Stream<Point> centroids = xs.stream().limit(n);
+        List<Point> centroids = xs.subList(0, n);
         for (int i = 0; i < iters; i++) {
-            centroids = clusters(xs, centroids.collect(toList()))
-                        .stream().map(this::average);
+            centroids = clusters(xs, centroids)
+                        .stream().map(this::average).collect(Collectors.toList());
         }
-        List<Point> ps = centroids.collect(toList());
-        clusters(xs, ps);
+        clusters(xs, centroids);
     }
 
     public Collection<List<Point>> clusters(List<Point> xs, List<Point> centroids) {
