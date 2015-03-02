@@ -25,7 +25,7 @@ public class Main {
 
     public void main() throws Exception {
         final int iterations = 100;
-        final List<Point> points = readPoints("../points.json");
+        final Point[] points = readPoints("../points.json").toArray(new Point[0]);
         final KMeans kMeans = new KMeans();
         long start = System.currentTimeMillis();
         for (int i = 0; i < iterations; i++) {
