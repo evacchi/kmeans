@@ -26,16 +26,11 @@ GlobalCompletionEvent avg_gce;
 
 // Point& average(PointList xs) {
 //     GPoint total = global_alloc<Point>(1);
- 
 //     forall(xs.base, xs.size, [total](Point& p){
 //         delegate::increment<async>(total, p);
 //     }); 
-
 //     Point result( delegate::read(total) / (double)xs.size );
-
 //     global_free(total);
-
-
 //     return result;
 // }
 
@@ -71,32 +66,21 @@ bool operator==(const MinPoint& a, const MinPoint& b) {
 }
 
 
+// Point _closest(Point p, PointList xs) {
 
-void dump_vector(GPointVector gpv) {
-    for(int j = 0; j < gpv->size(); j++) {
-        Point p = delegate::read(gpv->base+j);
-        std::cout << p << ", ";
-    };
-    std::cout << std::endl;
-}
+//     GlobalAddress<MinPoint> gmin = global_alloc<MinPoint>(1);
+//     Point firstp = delegate::read(xs.base);
+//     MinPoint min(p,firstp); 
 
-GlobalCompletionEvent closest_gce;
+//     delegate::write(gmin, min);
 
-Point _closest(Point p, PointList xs) {
+//     forall<&closest_gce>(xs.base, xs.size, [gmin, min](Point& p){
+//         MinPoint new_min(min.ref_point,p);
+//         delegate::compare_and_swap<async>(gmin, new_min, new_min);
+//     });
 
-    GlobalAddress<MinPoint> gmin = global_alloc<MinPoint>(1);
-    Point firstp = delegate::read(xs.base);
-    MinPoint min(p,firstp); 
-
-    delegate::write(gmin, min);
-
-    forall<&closest_gce>(xs.base, xs.size, [gmin, min](Point& p){
-        MinPoint new_min(min.ref_point,p);
-        delegate::compare_and_swap<async>(gmin, new_min, new_min);
-    });
-
-    return delegate::read(gmin).point;
-}
+//     return delegate::read(gmin).point;
+// }
 
 
 Point closest(Point p, PointList xs) {
@@ -112,6 +96,17 @@ Point closest(Point p, PointList xs) {
     }
     return min;
 }
+
+void dump_vector(GPointVector gpv) {
+    for(int j = 0; j < gpv->size(); j++) {
+        Point p = delegate::read(gpv->base+j);
+        std::cout << p << ", ";
+    };
+    std::cout << std::endl;
+}
+
+GlobalCompletionEvent closest_gce;
+
 
 void vectors_init() {
     for (int i = 0; i < N; i++) {
@@ -208,7 +203,7 @@ void calc_centroids(PointList xs) {
         DVLOG(0) << "avg is " <<    avg;
         gcentroids->push(avg);
     });
-
+    
     std::cout<<"CENTROIDS ARE NOW:: ";
     dump_vector(gcentroids);
 
@@ -273,11 +268,7 @@ int main(int argc, char const *argv[])
 {
     Grappa::init(&argc, &argv);
     Grappa::run([]{
-
-        // test::closest();
-
         test::centroids();
-        // std::cout<"::::::::::::";
         dump_clusters();
     });
     Grappa::finalize();
