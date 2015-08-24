@@ -11,7 +11,7 @@
 const int N = 3;
 const int ITERS = 15;
 
-const long NPOINTS = 10;
+const long NPOINTS = 100;
 
 typedef GlobalAddress<GlobalVector<Point>> GPointVector;
 GlobalAddress<GlobalHashMap<size_t, int>> gmap;
@@ -24,20 +24,32 @@ using namespace Grappa;
 
 GlobalCompletionEvent avg_gce;
 
-Point& average(PointList xs)
-{
-    GPoint total = global_alloc<Point>(1);
+// Point& average(PointList xs) {
+//     GPoint total = global_alloc<Point>(1);
  
-    forall<&avg_gce>(xs.base, xs.size, [total](Point& p){
-        delegate::increment<async,&avg_gce>(total, p);
-    }); 
+//     forall(xs.base, xs.size, [total](Point& p){
+//         delegate::increment<async>(total, p);
+//     }); 
 
-    std::cout<<"avg result";
+//     Point result( delegate::read(total) / (double)xs.size );
 
-    Point result( delegate::read(total) / xs.size );
+//     global_free(total);
 
-    global_free(total);
 
+//     return result;
+// }
+
+Point& average(PointList xs) {
+
+    Point avg(0,0);
+    for (int i = 0; i < xs.size; i++) {
+        Point p = delegate::read(xs.base+i);
+        avg = avg + p;
+
+    }
+    Point result = avg / (double)xs.size;
+
+    DVLOG(0)<<avg << "/" << xs.size << " = " << result;    
     return result;
 }
 
@@ -58,9 +70,19 @@ bool operator==(const MinPoint& a, const MinPoint& b) {
     return a.d < b.d;
 }
 
+
+
+void dump_vector(GPointVector gpv) {
+    for(int j = 0; j < gpv->size(); j++) {
+        Point p = delegate::read(gpv->base+j);
+        std::cout << p << ", ";
+    };
+    std::cout << std::endl;
+}
+
 GlobalCompletionEvent closest_gce;
 
-Point closest(Point p, PointList xs) {
+Point _closest(Point p, PointList xs) {
 
     GlobalAddress<MinPoint> gmin = global_alloc<MinPoint>(1);
     Point firstp = delegate::read(xs.base);
@@ -76,6 +98,21 @@ Point closest(Point p, PointList xs) {
     return delegate::read(gmin).point;
 }
 
+
+Point closest(Point p, PointList xs) {
+    Point min = delegate::read(xs.base);
+    double min_dist = dist(p, min);
+    for (size_t i=1;i<xs.size;i++) {
+        Point candidate = delegate::read(xs.base+i);
+        double d = dist(p, candidate);
+        if (d < min_dist) {
+            min = candidate;
+            min_dist = d;
+        }
+    }
+    return min;
+}
+
 void vectors_init() {
     for (int i = 0; i < N; i++) {
         auto gv = GlobalVector<Point>::create(NPOINTS);
@@ -86,6 +123,7 @@ void vectors_init() {
         gvectors[i]->clear();
     }
 }
+
 void map_init(PointList xs) {
     DVLOG(0) << "map init";
     gmap = GlobalHashMap<size_t, int>::create(N);
@@ -96,7 +134,7 @@ void map_init(PointList xs) {
         Point p = delegate::read(xs.base+i);
         delegate::write(gcentroids->base+i, p);
 
-        // DVLOG(0) << p.hash()<<", " << i;
+        DVLOG(0) << p.hash()<<", " << i;
         gmap->insert(p.hash(), i);
 
     }  
@@ -106,10 +144,13 @@ void map_init(PointList xs) {
 }
 
 void gcentroids_init(PointList xs) {
-    gcentroids = GlobalVector<Point>::create(N);
+    GPointVector gpv = GlobalVector<Point>::create(N);
+    on_all_cores([gpv]{
+        gcentroids = gpv;
+    });
     for (int i = 0; i < N; i++) {
         Point p = delegate::read(xs.base+i);
-        DVLOG(0) << p;
+        DVLOG(0) << "centroid " << p;
         gcentroids->push(p);
     };
 }
@@ -117,30 +158,18 @@ void gcentroids_init(PointList xs) {
 void map_insert(Point& key, Point& value) {
     int vect_idx;
 
-    if (gmap->lookup(key.hash(),&vect_idx)) {
-       DVLOG(0) << "vect_idx " << vect_idx << std::endl;
-       DVLOG(0) << gvectors[vect_idx];
-    } else {
-        DVLOG(0) << "DIE PLEASE\n";
-    }
+    gmap->lookup(key.hash(), &vect_idx);
+
+    DVLOG(3) << "vect_idx " << vect_idx << std::endl;
+    assert(vect_idx < N);
 
     gvectors[vect_idx]->push(value);
-
-    DVLOG(0) << "PUSHED";
 }
 
 void map_reset() {
     gmap->clear();
-    // forall(gcentroids, [](int64_t i, Point& c){
-    //     int j = i;
-    //     DVLOG(0) << i << "::" << c.hash();
-    //     gmap->insert(c.hash(), j);
-    //     DVLOG(0) << i << "::" << c;
-        
-    //     gvectors[i]->clear();
-    // });
 
-    for(int64_t i; i < gcentroids->size(); i++){
+    for(int64_t i = 0; i < gcentroids->size(); i++){
         Point c = delegate::read(gcentroids->base+i);
         int j = i;
         DVLOG(0) << i << "::" << c.hash();
@@ -161,39 +190,43 @@ void calc_centroids(PointList xs) {
 
     for(int i = 0; i < xs.size; i++) {
         Point x = delegate::read(xs.base+i);   
-
-        DVLOG(0) << x;
-
         Point closest_p = closest(x, centroids);
 
-        DVLOG(0) << closest_p;
+        DVLOG(0) << x << " is closest to " << closest_p ;
 
         map_insert(closest_p, x);
     };
 
+    DVLOG(4) << "reset centroids";
+
+    gcentroids->clear();
 
     gmap->forall_entries([](size_t hash, int vect_idx){
         PointList ps(gvectors[vect_idx]->base, gvectors[vect_idx]->size());
+        DVLOG(0) << "call average with a size of " << gvectors[vect_idx]->size();
         Point avg = average(ps);
-        std::cout << avg << std::endl;
+        DVLOG(0) << "avg is " <<    avg;
         gcentroids->push(avg);
     });
+
+    std::cout<<"CENTROIDS ARE NOW:: ";
+    dump_vector(gcentroids);
 
 
 }
 
+
 void dump_clusters() {
         std::cout << "dumping..."<<  gcentroids->size() <<"\n";
 
-    forall(gcentroids, [] (Point& c) {
-        std::cout << "centroid " << c;
+    for(int i = 0; i < N; i++) {
+        Point c = delegate::read(gcentroids->base+i);
+        std::cout << "centroid " << c << "\n    ";
         int idx;
         gmap->lookup(c.hash(), &idx);
-        forall(gvectors[idx], [] (Point& p){
-            std::cout << p << ", ";
-        });
+        dump_vector(gvectors[idx]);
         std::cout << std::endl;
-    });
+    };
 }
 
 
@@ -245,7 +278,7 @@ int main(int argc, char const *argv[])
 
         test::centroids();
         // std::cout<"::::::::::::";
-        // dump_clusters();
+        dump_clusters();
     });
     Grappa::finalize();
     return 0;
