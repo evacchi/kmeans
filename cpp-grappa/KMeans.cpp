@@ -3,219 +3,248 @@
 #include <GlobalHashMap.hpp>
 #include <GlobalHashSet.hpp>
 #include <limits>
+#include <cassert>
 
 #include "KMeans.hpp"
 
 
+const int N = 3;
+const int ITERS = 15;
+
+const long NPOINTS = 10;
+
+typedef GlobalAddress<GlobalVector<Point>> GPointVector;
+GlobalAddress<GlobalHashMap<size_t, int>> gmap;
+GPointVector gvectors[N];
+
+GPointVector gcentroids; 
+
+
 using namespace Grappa;
-typedef GlobalAddress<GlobalHashMap<size_t, GPointVector>> PointMap;
 
 
-const int nelems = 6;
-const int n = 3 ;
-const int iters = 15;
-const int executions = 100; 
-PointMap hm;
-PointList xs;
-PointList centroids;
-
-GlobalCompletionEvent gce;      // tasks synchronization
-
-
-
-GlobalAddress<Point> my_add(const GlobalAddress<Point>& p1, const  GlobalAddress<Point>& p2) {
-    delegate::call(p1, [p2] (Point& _p1) {
-        _p1 = _p1 + delegate::read(p2);
-    });
-    return p1;
-}
-
-
-Point average(GlobalAddress<GlobalAddress<Point>> ps, size_t npoints) {
-    return my_reduce<Point, my_add>(ps, npoints, Point(0,0)) / (double) npoints;
-}
-
-// choices minBy { y => dist(x, y) }
-GlobalAddress<Point> closest(Point x, PointList choices) {
-    return minBy<Point>(choices.base, choices.size, [x] (Point y) { return dist(x,y); });
-}
-
-
-typedef GlobalAddress<Point> GPoint;
-
-// template <typename F>
-// //GlobalAddress<GlobalHashMap<Point,GPointVector>> 
-// GlobalAddress<GlobalHashSet<Point>>
-// groupBy(GlobalAddress<Point> seq, size_t nelems, F group) {
-//     DVLOG(0) << "groupBy: N = "  << nelems << "\n";
-
-//     GlobalAddress< GlobalVector<std::pair<Point,Point>> > gpv = GlobalVector<std::pair<Point,Point>>::create(nelems);
-
-//     DVLOG(0) << "created gvector <Point,Point> "  << "\n";
-
-//     forall(seq, nelems, [group, gpv](Point& p) {
-        
-//         GlobalAddress<Point> gk = group(p);
-//         DVLOG(0) << "delegate call"  << "\n";
-
-//         Point k = delegate::read(gk);
-
-//         DVLOG(0) << "groupBy: "  << k << " -> " << p << "\n";
-
-//         gpv->push(std::make_pair(k,p));
-//     });
-
-//     DVLOG(0) << "NOW:: insert all keys; size = " << gpv->size();
-
-
-
-//     GlobalAddress<GlobalHashSet<Point>> gps = GlobalHashSet<Point>::create(gpv->size());
-
-
-//     forall(gpv, [gps](std::pair<Point,Point>& p) {
-//         gps->insert(p.first);
-//     });
-
-//     DVLOG(0) << "groupBy: END";
-
-//     return gps;
-
-// }
-void groupBy() {
-    forall(xs.base, xs.size, [](int64_t i, Point& p){
-        GlobalAddress<Point> centroid_addr = closest(p, centroids);
-        Point centroid = delegate::read(centroid_addr);
-        size_t h = std::hash<Point>()(centroid);
-        GPointVector gpv;
-        hm->insert(h,&gpv);
-        gpv->push(xs.base+i);
-    });
-}
-
-void hm_clearAll() {
-    hm->forall_entries([](size_t h, GPointVector gpv){
-        gpv->clear();
-    });
-}
-
-// void test_groupBy(PointList xs) {
-
-//     PointList centroids(xs.base, 3);
-
-//     DVLOG(0) << "test groupBy" << std::endl;
-
-
-
-//     GlobalAddress<GlobalHashSet<Point>> set = 
-//         groupBy(xs.base, xs.size, (Point p){ return closest(p, centroids); });
-
-
-
-
-//     set->forall_keys([](Point& k){
-//         std::cout << k << "\n";
-//     });
-
-//     std::cout << std::endl;
-// }
-
-
-void clusters() {
-    DVLOG(0) << "clusters "  << "\n";
-
-
-    groupBy();
-    //centroids->clear();
-
-    hm->forall_entries([](size_t h, GPointVector gpv){
-        average(gpv->base, gpv->size());
-    });
-}
-
-
-
-
-int main(int argc, char *argv[])
+Point& average(PointList xs)
 {
+    GPoint total = global_alloc<Point>(1);
+ 
+    forall(xs.base, xs.size, [total](Point& p){
+        DVLOG(0) << "test";
+        delegate::increment<async>(total, p);
+    }); 
+
+    Point result( delegate::read(total) / xs.size );
+
+    global_free(total);
+
+    return result;
+}
+
+struct MinPoint {
+    double d = 0;
+    Point ref_point;
+    Point point;
+    MinPoint(){}
+    MinPoint(const Point& ref_point_, const Point& p_) : point(p_), ref_point(ref_point_) {
+        d = dist(point, ref_point);
+        // std::cout << point << ref_point << d << "\n";
+
+    }  
+};
+
+bool operator==(const MinPoint& a, const MinPoint& b) {
+    // std::cout << (a.d<b.d) << std::endl;
+    return a.d < b.d;
+}
+
+Point closest(Point p, PointList xs) {
+
+    GlobalAddress<MinPoint> gmin = global_alloc<MinPoint>(1);
+    Point firstp = delegate::read(xs.base);
+    MinPoint min(p,firstp); 
+
+    delegate::write(gmin, min);
+
+    forall(xs.base, xs.size, [gmin, min](Point& p){
+        MinPoint new_min(min.ref_point,p);
+        delegate::compare_and_swap<async>(gmin, new_min, new_min);
+    });
+
+    return delegate::read(gmin).point;
+}
+
+void vectors_init() {
+    for (int i = 0; i < N; i++) {
+        auto gv = GlobalVector<Point>::create(NPOINTS);
+        on_all_cores([i,gv] {
+            gvectors[i] = gv;
+        });
+        DVLOG(0) << "gvectors[" << i << "] inited";  
+        gvectors[i]->clear();
+    }
+}
+void map_init(PointList xs) {
+    DVLOG(0) << "map init";
+    gmap = GlobalHashMap<size_t, int>::create(N);
+
+    for (int i = 0; i < N; i++) {
+        
+        // init first N centroids
+        Point p = delegate::read(xs.base+i);
+        delegate::write(gcentroids->base+i, p);
+
+        // DVLOG(0) << p.hash()<<", " << i;
+        gmap->insert(p.hash(), i);
+
+    }  
+
+    vectors_init();
+
+}
+
+void gcentroids_init(PointList xs) {
+    gcentroids = GlobalVector<Point>::create(N);
+    for (int i = 0; i < N; i++) {
+        Point p = delegate::read(xs.base+i);
+        DVLOG(0) << p;
+        gcentroids->push(p);
+    };
+}
+
+void map_insert(Point& key, Point& value) {
+    int vect_idx;
+
+
+    if (gmap->lookup(key.hash(),&vect_idx)) {
+
+       DVLOG(0) << "vect_idx " << vect_idx << std::endl;
+       DVLOG(0) << gvectors[vect_idx];
+    } else {
+        DVLOG(0) << "DIE PLEASE\n";
+    }
+
+    gvectors[vect_idx]->push(value);
+
+    DVLOG(0) << "PUSHED";
+}
+
+void map_reset() {
+    gmap->clear();
+    // forall(gcentroids, [](int64_t i, Point& c){
+    //     int j = i;
+    //     DVLOG(0) << i << "::" << c.hash();
+    //     gmap->insert(c.hash(), j);
+    //     DVLOG(0) << i << "::" << c;
+        
+    //     gvectors[i]->clear();
+    // });
+
+    for(int64_t i; i < gcentroids->size(); i++){
+        Point c = delegate::read(gcentroids->base+i);
+        int j = i;
+        DVLOG(0) << i << "::" << c.hash();
+        gmap->insert(c.hash(), j);
+        DVLOG(0) << i << "::" << c;
+        
+        gvectors[i]->clear();
+    };
+}
+
+void calc_centroids(PointList xs) {
+
+    map_reset();
+
+    DVLOG(0) << "map was reset";
+
+    PointList centroids(gcentroids->base, gcentroids->size());
+
+    for(int i = 0; i < xs.size; i++) {
+        Point x = delegate::read(xs.base+i);   
+
+        DVLOG(0) << x;
+
+        Point closest_p = closest(x, centroids);
+
+        DVLOG(0) << closest_p;
+
+        map_insert(closest_p, x);
+    };
+
+
+    gmap->forall_entries([](size_t hash, int vect_idx){
+        PointList ps(gvectors[vect_idx]->base, gvectors[vect_idx]->size());
+        Point avg = average(ps);
+        std::cout << avg << std::endl;
+        gcentroids->push(avg);
+    });
+
+
+}
+
+void dump_clusters() {
+        std::cout << "dumping..."<<  gcentroids->size() <<"\n";
+
+    forall(gcentroids, [] (Point& c) {
+        std::cout << "centroid " << c;
+        int idx;
+        gmap->lookup(c.hash(), &idx);
+        forall(gvectors[idx], [] (Point& p){
+            std::cout << p << ", ";
+        });
+        std::cout << std::endl;
+    });
+}
 
 
 
 
-
-    init(&argc, &argv);
-    run([=] {
-        //PointList xs(from_json());
-
-        int k = 0; 
-
-        DVLOG(0) << "init";
-        hm = GlobalHashMap<size_t, GPointVector>::create(n);
-        xs = PointList(nelems);
-        centroids = PointList(10);
-
-        for (int i = 0; i < nelems; i++) {
-            delegate::write(xs.base+k++, Point(i+1, i));
-            delegate::write(xs.base+k++, Point(i, i+1));
+namespace test {
+    void average() {
+        PointList xs(NPOINTS);
+        for (int i = 0; i < NPOINTS; i++) {
+            delegate::write(xs.base+i, Point(i,i));
+        }
+        Point p = average(xs);
+        assert (p.x == 4.5 && p.y == 4.5);
+    }
+    void closest() {
+        PointList xs(NPOINTS);
+        for (int i = 0; i < NPOINTS; i++) {
+            delegate::write(xs.base+i, Point(i,i));
+        }
+        Point p = closest(Point(4,5), xs);
+        // std::cout << p <<"\n";
+        assert (p.x == 4 && p.y == 4);
+    }
+    void centroids() {
+        PointList xs(NPOINTS);
+        for (int i = 0; i < NPOINTS; i++) {
+            delegate::write(xs.base+i, Point(i,i));
         }
 
+        gcentroids_init(xs);
+        map_init(xs);
 
-        PointList centroids(n);
+        for (int k=0;k<ITERS;k++) {
+            calc_centroids(xs);
+        }
+        calc_centroids(xs);
+    }
 
-        for (int i = 0; i < n; i++) {
-            
-            Point p = delegate::read(xs.base+i);
-            delegate::write(centroids.base+i, p);
-            size_t h =  std::hash<Point>()(p);
-
-            GPointVector gpv = GlobalVector<GlobalAddress<Point>>::create(xs.size);
-            gpv->clear();
-
-            hm->insert(h, gpv);
-
-            DVLOG(0) << p << " -> " << h;
-
-        }  
-
-
-        DVLOG(0) << "groupby";
-
-        groupBy();
-
-        hm->forall_entries([](size_t h, GPointVector gpv){
-            forall(gpv, [h](GlobalAddress<Point>& p) {
-                DVLOG(0) << h << " --> " << delegate::read(p);                 
-            });
-
-        });
-        
-
-
-        // auto xs = global_alloc<Point>(6);
-        // for (int i = 0; i < 6; i++) {
-        //      delegate::write(xs+i, Point(i,i));
-        // }
-
-
-        // test_groupBy(PointList(xs, 6));
+}
 
 
 
-            // for (size_t i = 0; i < iters; i++)  {
-            //     DVLOG(0) << "iteration: " << i << "\n";
-            //     auto cs = clusters(xs, centroids);
-            //     PointList ps(cs.size);
-            //     forall<unbound>(0, cs.size, [cs,ps](int64_t i){
-            //         delegate::write(ps.base+i, average(cs.base+i, cs.size));
-            //     });
-            // }
+int main(int argc, char const *argv[])
+{
+    Grappa::init(&argc, &argv);
+    Grappa::run([]{
 
-            // clusters(xs, centroids);
+        // test::closest();
 
+        test::centroids();
+        // std::cout<"::::::::::::";
+        // dump_clusters();
     });
-    finalize();
-
-
-
-
+    Grappa::finalize();
     return 0;
 }
