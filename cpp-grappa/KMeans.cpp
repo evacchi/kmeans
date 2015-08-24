@@ -22,15 +22,17 @@ GPointVector gcentroids;
 
 using namespace Grappa;
 
+GlobalCompletionEvent avg_gce;
 
 Point& average(PointList xs)
 {
     GPoint total = global_alloc<Point>(1);
  
-    forall(xs.base, xs.size, [total](Point& p){
-        DVLOG(0) << "test";
-        delegate::increment<async>(total, p);
+    forall<&avg_gce>(xs.base, xs.size, [total](Point& p){
+        delegate::increment<async,&avg_gce>(total, p);
     }); 
+
+    std::cout<<"avg result";
 
     Point result( delegate::read(total) / xs.size );
 
@@ -56,6 +58,8 @@ bool operator==(const MinPoint& a, const MinPoint& b) {
     return a.d < b.d;
 }
 
+GlobalCompletionEvent closest_gce;
+
 Point closest(Point p, PointList xs) {
 
     GlobalAddress<MinPoint> gmin = global_alloc<MinPoint>(1);
@@ -64,7 +68,7 @@ Point closest(Point p, PointList xs) {
 
     delegate::write(gmin, min);
 
-    forall(xs.base, xs.size, [gmin, min](Point& p){
+    forall<&closest_gce>(xs.base, xs.size, [gmin, min](Point& p){
         MinPoint new_min(min.ref_point,p);
         delegate::compare_and_swap<async>(gmin, new_min, new_min);
     });
@@ -113,9 +117,7 @@ void gcentroids_init(PointList xs) {
 void map_insert(Point& key, Point& value) {
     int vect_idx;
 
-
     if (gmap->lookup(key.hash(),&vect_idx)) {
-
        DVLOG(0) << "vect_idx " << vect_idx << std::endl;
        DVLOG(0) << gvectors[vect_idx];
     } else {
