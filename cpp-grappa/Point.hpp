@@ -13,16 +13,15 @@ struct Point {
     Point(): Point(0,0) {}
     Point(const Point& p): Point(p.x, p.y) {}
 
-    Point operator/(double d) {
-        return Point(x/d, y/d);
-    }
+    Point operator/(double d) { return Point(x/d, y/d); }
 
+    double modulus() { return sqrt(sq(x)+sq(y)); }
 
-    double modulus() {
-        return sqrt(sq(x)+sq(y));
-    }
+    size_t hash() ;
 
 };
+
+typedef GlobalAddress<Point> GPoint;
 
 
 Point operator-(const Point& p1, const Point& p2) {
@@ -31,6 +30,12 @@ Point operator-(const Point& p1, const Point& p2) {
 Point operator+(const Point& p1, const Point& p2) {
     return Point(p1.x + p2.x, p1.y + p2.y);
 }
+Point& operator+=(Point& p1, const Point& p2) {
+    p1.x += p2.x;
+    p1.y += p2.y;
+    return p1;
+}
+
 bool operator==(const Point& p1, const Point& p2) {
     p1.x == p2.x && p1.y == p2.y;
 }
@@ -50,6 +55,8 @@ namespace std {
     }
   };
 }
+
+size_t Point::hash() { return std::hash<Point>()(*this); }
 
 std::ostream& operator<<(std::ostream& stream, const Point& p) {
     return stream << "Point(" << ( (double) p.x ) << ", " << ( (double) p.y) << ")" ;
