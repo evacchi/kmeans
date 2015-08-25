@@ -14,6 +14,8 @@ struct Point {
     Point(const Point& p): Point(p.x, p.y) {}
 
     Point operator/(double d) { return Point(x/d, y/d); }
+    Point& operator/=(const double& d) { x/=d; y/=d; return *this; }
+    Point& operator+=(const Point& other) { x+=other.x; y+=other.y; return *this; }
 
     double modulus() { return sqrt(sq(x)+sq(y)); }
 
@@ -30,11 +32,7 @@ Point operator-(const Point& p1, const Point& p2) {
 Point operator+(const Point& p1, const Point& p2) {
     return Point(p1.x + p2.x, p1.y + p2.y);
 }
-Point& operator+=(Point& p1, const Point& p2) {
-    p1.x += p2.x;
-    p1.y += p2.y;
-    return p1;
-}
+
 
 bool operator==(const Point& p1, const Point& p2) {
     p1.x == p2.x && p1.y == p2.y;
